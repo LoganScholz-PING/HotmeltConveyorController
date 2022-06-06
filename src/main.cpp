@@ -5,10 +5,38 @@
 #include "Heartbeat.h"
 #include "NextionTriggerFunctions.h"
 
+// object instantiations
 SoftwareSerial swSerial(11, 12); // nextion display will be connected to 11(RX) and 12(TX)
 EasyNex myNex(swSerial);
 
+// program state tracking variables
 MOTOR_STATE motor_state = NOT_INIT;
+
+unsigned long lastHeartBeatTime = 0;
+unsigned long heartBeatDelay    = 1000;
+
+unsigned long last_button_press_time = 0;
+unsigned long button_debounce_delay = 500;
+
+unsigned long jog_timer = 2000;
+
+// physical button tracking
+bool pinput_start_previous   = false;
+bool pinput_stop_previous    = false;
+bool pinput_jog_previous     = false;
+bool pinput_start            = false;
+bool pinput_stop             = false;
+bool pinput_jog              = false;
+bool pinput_emergency_stop   = false;
+bool pinput_proximity_sensor = false;
+
+// nextion button tracking (may not need)
+bool dinput_stop        = false;
+bool dinput_start       = false;
+bool dinput_mtr_reverse = false;
+bool dinput_mtr_forward = false;
+bool dinput_jog         = false;
+
 
 void intCallBack() {
   detachInterrupt(HM_PIN_EMERGENCY_STOP);

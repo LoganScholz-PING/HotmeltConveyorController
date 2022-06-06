@@ -4,6 +4,8 @@
 #include <Arduino.h>
 #include "HotmeltConveyor.h"
 
+extern unsigned long lastHeartBeatTime;
+extern unsigned long heartBeatDelay;
 extern MOTOR_STATE motor_state;
 
 void HeartBeat() {
