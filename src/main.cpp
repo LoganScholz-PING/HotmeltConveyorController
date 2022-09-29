@@ -1,21 +1,32 @@
 #include <Arduino.h>
-#include <SoftwareSerial.h> // for talking to nextion display
-#include <EasyNextionLibrary.h> // from SRC folder - modified to use SoftwareSerial
+
+// for nextion display
+#include <SoftwareSerial.h> 
+#include <EasyNextionLibrary.h> // from local project "lib" folder - modified to use SoftwareSerial
+
+// for VL6180x
+#include <Wire.h>
+#include <VL6180X.h>
+
+// general or program specific includes 
 #include "HotmeltConveyor.h"
 #include "Heartbeat.h"
 #include "NextionTriggerFunctions.h"
 
-// object instantiations
-SoftwareSerial swSerial(11, 12); // nextion display will be connected to 11(RX) and 12(TX)
+// library object instantiations
+SoftwareSerial swSerial(11, 12); // nextion display will be connected to 11(TX) and 12(RX)
 EasyNex myNex(swSerial);
+
+VL6180X LIDAR;
 
 // program state tracking variables
 MOTOR_STATE motor_state = MOTOR_STATE::NOT_INIT;
 bool MOTOR_OFF = false;
 bool MOTOR_ON  = true;
 
-bool prox_interrupt_triggered = false;
-bool estop_interrupt_triggered = false;
+volatile bool prox_interrupt_triggered = false;
+volatile bool estop_interrupt_triggered = false;
+bool lidar_interrupt_triggered = false;
 
 #define TURN_MOTOR_OFF digitalWrite(HM_PIN_MOTOR_ENABLE, true)
 #define TURN_MOTOR_ON  digitalWrite(HM_PIN_MOTOR_ENABLE, false);
@@ -28,131 +39,157 @@ unsigned long button_debounce_delay = 500;
 
 unsigned long jog_timer = 2000;
 
-// physical button tracking
-bool pinput_start_previous   = false;
-bool pinput_stop_previous    = false;
-bool pinput_jog_previous     = false;
-bool pinput_start            = false;
-bool pinput_stop             = false;
-bool pinput_jog              = false;
-bool pinput_emergency_stop   = false;
-bool pinput_proximity_sensor = false;
-
 // nextion button tracking (may not need)
-bool dinput_stop        = false;
-bool dinput_start       = false;
-bool dinput_mtr_reverse = false;
-bool dinput_mtr_forward = false;
-bool dinput_jog         = false;
+bool dInput_stop        = false;
+bool dInput_start       = false;
+bool dInput_mtr_reverse = false;
+bool dInput_mtr_forward = false;
+bool dInput_jog         = false;
+
+void delaySafeMilli(unsigned long time_to_wait) {
+  unsigned long start = millis();
+  while(millis() - start <= time_to_wait) { /* do nothing but let background tasks run */ }
+}
 
 void intCallBackESTOP() {
-  //PORTB = PORTB & PORTB_MOTOR_OFF_MASK; // set motor enable pin false
   TURN_MOTOR_OFF;
   estop_interrupt_triggered = true;
-  motor_state = INTERRUPT;
+  motor_state = MOTOR_STATE::INTERRUPT;
 }
 
 void intCallBackPROX() {
-  //PORTB = PORTB & PORTB_MOTOR_OFF_MASK; // set motor enable pin false
   TURN_MOTOR_OFF;
   prox_interrupt_triggered = true;
-  motor_state = INTERRUPT;
-}
-
-void stopMotor() {
-  // turn off the motor
-  Serial.println(F("[INFO] STOP"));
-  motor_state = STOPPED;
-  TURN_MOTOR_OFF; // turn off motor
-  myNex.writeStr("t1.txt", "MOTOR STATUS: STOPPED");
-  last_button_press_time = millis();
-}
-
-void jogMotor() {
-  // jog the conveyor forward jog_timer seconds
-  Serial.println(F("[INFO] JOG"));
-  myNex.writeStr("t1.txt", "MOTOR STATUS: JOGGING");
-  motor_state = JOGGING;
-  TURN_MOTOR_ON;
-  unsigned long start_time = millis();
-  while(millis() - start_time <= jog_timer) { /* move motor for jog_timer seconds */ }
-  stopMotor();
-  last_button_press_time = millis();
+  motor_state = MOTOR_STATE::INTERRUPT;
 }
 
 void startMotor() {
   // start button pressed
   Serial.println(F("[INFO] START"));
-  motor_state = RUNNING;
+  motor_state = MOTOR_STATE::RUNNING;
   TURN_MOTOR_ON;
-  myNex.writeStr("t1.txt", "MOTOR STATUS: STARTED");
+  myNex.writeStr("t0.txt", "MOTOR STATUS: STARTED");
   last_button_press_time = millis();
 }
 
-void checkForPhysicalButtonPress() {
-  // INPUTS WILL ONLY BE POLED FROM THE NEXTION DISPLAY!
+void stopMotor() {
+  // turn off the motor
+  Serial.println(F("[INFO] STOP"));
+  motor_state = MOTOR_STATE::STOPPED;
+  TURN_MOTOR_OFF; // turn off motor
+  myNex.writeStr("t0.txt", "MOTOR STATUS: STOPPED");
+  last_button_press_time = millis();
+}
 
-  // byte port_d_contents = PORTD;
-  // pinput_start = !(port_d_contents & PORTD_START_MOTOR_BTN_MASK); // these are INPUT_PULLUP so false = pressed
-  // pinput_stop  = !(port_d_contents & PORTD_STOP_MOTOR_BTN_MASK);
-  // pinput_jog   = !(port_d_contents & PORTD_JOG_MOTOR_BTN_MASK);
-
-  // if((millis() - last_button_press_time) >= button_debounce_delay) {
-  //   // there is a priority system here: 1-stop 2-jog 3-start
-  //   if((pinput_stop != pinput_stop_previous)        && pinput_stop)  { stopMotor();  }
-  //   else if((pinput_jog != pinput_jog_previous)     && pinput_jog)   { jogMotor();   }
-  //   else if((pinput_start != pinput_start_previous) && pinput_start) { startMotor(); }
-  // }
-
-  // pinput_start_previous = pinput_start;
-  // pinput_stop_previous  = pinput_stop;
-  // pinput_jog_previous   = pinput_jog;
+void jogMotor() {
+  // jog the conveyor forward jog_timer milliseconds
+  Serial.println(F("[INFO] JOG"));
+  myNex.writeStr("t0.txt", "MOTOR STATUS: JOGGING");
+  motor_state = MOTOR_STATE::JOGGING;
+  TURN_MOTOR_ON;
+  unsigned long start_time = millis();
+  while(millis() - start_time <= jog_timer) { /* move motor for jog_timer milliseconds */ }
+  stopMotor();
+  last_button_press_time = millis();
 }
 
 void initializePins() {
   // interrupt inputs (INPUT_PULLUP @ CHIP LEVEL)
+  // physical emergency stop button interrupt
   pinMode(HM_PIN_EMERGENCY_STOP, INPUT_PULLUP);
   attachInterrupt(digitalPinToInterrupt(HM_PIN_EMERGENCY_STOP), intCallBackESTOP, FALLING);
+  // 1st LIDAR proximity interrupt (OR MECHANICAL BUTTON INTERRUPT)
   pinMode(HM_PIN_PROXIMITY_INTERRUPT, INPUT_PULLUP);
   attachInterrupt(digitalPinToInterrupt(HM_PIN_PROXIMITY_INTERRUPT), intCallBackPROX, FALLING);
-  
-  // normal inputs
-  //pinMode(HM_PIN_START_MOTOR_BTN, INPUT_PULLUP);
-  //pinMode(HM_PIN_STOP_MOTOR_BTN, INPUT_PULLUP);
-  //pinMode(HM_PIN_JOG_MOTOR_BTN, INPUT_PULLUP);
 
   // outputs
   pinMode(HM_PIN_MOTOR_ENABLE, OUTPUT);
   TURN_MOTOR_OFF;
 }
 
+void initLIDAR() {
+  Wire.begin();
+  LIDAR.init();
+  LIDAR.configureDefault();
+  LIDAR.writeReg(VL6180X::SYSRANGE__MAX_CONVERGENCE_TIME, 30);
+  LIDAR.writeReg16Bit(VL6180X::SYSALS__INTEGRATION_PERIOD, 50);
+  LIDAR.setTimeout(200);
+
+  // stop continuous mode if already active
+  LIDAR.stopContinuous();
+  // in case stopContinuous() triggered a single-shot
+  // measurement, wait for it to complete
+  delaySafeMilli(300);
+  // start interleaved continuous mode with period of 100 ms
+  LIDAR.startRangeContinuous(50);
+}
+
+void initializeNextionDisplay() {
+  myNex.begin(38400); // software serial port (pin 11(RX) pin 12(TX))
+}
+
+void checkLIDARDistance() {
+  if(!lidar_interrupt_triggered && 
+     (motor_state != MOTOR_STATE::INTERRUPT && motor_state != MOTOR_STATE::STOPPED && motor_state != MOTOR_STATE::ERROR) && 
+     LIDAR.readRangeContinuousMillimeters() <= 250) {
+    TURN_MOTOR_OFF;
+    myNex.writeStr("t0.txt", "--> CONVEYOR ENDSTOP INTERRUPT!");
+    motor_state = MOTOR_STATE::INTERRUPT;
+    lidar_interrupt_triggered = true;
+  }
+
+  if (LIDAR.timeoutOccurred()) { Serial.println("ERROR!! LIDAR TIMEOUT!"); }
+}
+
 void setup() {
-  Serial.begin(9600); // hardware serial
+  Serial.begin(38400); // hardware serial
   while(!Serial) { /* hang out */ }
 
-  myNex.begin(9600); // software serial port (pin 11(RX) pin 12(TX))
-
+  initializeNextionDisplay();
   initializePins();
-  myNex.writeStr("t1.txt", "INITIALIZED");
+  initLIDAR();
+  
+  myNex.writeStr("t0.txt", "--> CONVEYOR INITIAL STARTUP");
   lastHeartBeatTime = millis();
-  motor_state = NOT_INIT;
+  motor_state = MOTOR_STATE::NOT_INIT;
+
   Serial.println("\nENTERING MAIN LOOP...\n");
 }
 
 void loop() {
-  if(prox_interrupt_triggered) { 
+  unsigned long loop_timer_start = micros();
+  
+  checkLIDARDistance(); // will set prox_interrupt_triggered = true if anything is within 250mm
+
+  if (prox_interrupt_triggered) { 
     motor_state = MOTOR_STATE::INTERRUPT; 
-    myNex.writeStr("t1.txt", "PROX INTERRUPT TRIGGERED"); 
+    myNex.writeStr("t0.txt", "PROX INTERRUPT TRIGGERED"); 
     Serial.println(F("PROX INTERRUPT TRIGGERED!"));
     prox_interrupt_triggered = false;
   } else if (estop_interrupt_triggered) {
     motor_state = MOTOR_STATE::INTERRUPT; 
-    myNex.writeStr("t1.txt", "E-STOP INTERRUPT TRIGGERED");
+    myNex.writeStr("t0.txt", "E-STOP INTERRUPT TRIGGERED");
     Serial.println(F("E-STOP INTERRUPT TRIGGERED!")); 
     estop_interrupt_triggered = false;
+  } else if (lidar_interrupt_triggered) {
+    if(LIDAR.readRangeContinuousMillimeters() > 250) {
+      if(LIDAR.timeoutOccurred()) {
+        Serial.println("LIDAR TIMEOUT IN MAIN LOOP");
+      } else {
+        TURN_MOTOR_ON;
+        motor_state = MOTOR_STATE::RUNNING;
+        lidar_interrupt_triggered = false;
+        myNex.writeStr("t0.txt", "--> REMOVED CONVEYOR ENDSTOP INTERRUPT!");
+      }
+    }
   }
 
   myNex.NextionListen();
-  
   HeartBeat(motor_state);
+
+  unsigned long loop_timer_stop = micros();
+
+  unsigned long loop_delta = loop_timer_stop - loop_timer_start;
+  Serial.print(" --> Loop Delta (uS): ");
+  Serial.println(loop_delta);
 }
